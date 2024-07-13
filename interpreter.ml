@@ -1,28 +1,40 @@
-type bop = Sum | Sub | Mul | Div 
-         | Eq | Gt | Lt | Neq
-         | And | Or
+(*++++++++++++++++++++++++++++++++++++++*)
+(*  Interpretador para L1               *)
+(*   - inferência de tipos              *)
+(*   - avaliador big step com ambiente  *)
+(*++++++++++++++++++++++++++++++++++++++*)
 
-          
-type tipo = 
-    Int 
-  | Bool
-  | Arrow of tipo * tipo
-  | List of tipo
-  | Maybe of tipo
-  
-(* 
-e:: = n | b | e1 bop e2 | if e1 then e2 else e3 | x
-| fn x:T => e | let x:T = e1 in e2 | e1 e2  
-*)
-type expr = 
-    Nv of int
-  | Bv of bool 
-  | Bop of bop * expr * expr 
-  | If  of expr * expr * expr 
-  | Id  of string 
-  | Fun of string * tipo * expr
-  | Let of string * tipo *  expr * expr
+
+
+(**+++++++++++++++++++++++++++++++++++++++++*)
+(*  SINTAXE, AMBIENTE de TIPOS e de VALORES *)
+(*++++++++++++++++++++++++++++++++++++++++++*)
+
+type tipo =
+    TyInt
+  | TyBool
+  | TyFn of tipo * tipo
+  | TyPair of tipo * tipo
+  | TyList of tipo
+  | TyMaybe of tipo
+
+type ident = string
+
+type op = Sum | Sub | Mult | Div | Eq | Gt | Lt | Geq | Leq 
+
+type expr =
+  | Num of int
+  | Var of ident
+  | Bool of bool
+  | Binop of op * expr * expr
+  | Pair of expr * expr
+  | Fst of expr
+  | Snd of expr
+  | If of expr * expr * expr
+  | Fn of ident * tipo * expr
   | App of expr * expr
+  | Let of ident * tipo * expr * expr
+  | LetRec of ident * tipo * expr  * expr
   | Nothing of tipo
   | Just of expr
   | Nil of tipo
@@ -30,305 +42,319 @@ type expr =
   | MatchList of expr * expr * string * string * expr
   | Cons of expr * expr
   | Pipe of expr * expr
+  
+type valor = 
+    VNum of int
+  | VBool of bool
+  | VPair of valor * valor
+  | VClos  of ident * expr * renv
+  | VRClos of ident * ident * expr * renv 
+  | VNothing of tipo
+  | VNil of tipo
+  | VJust of valor
+  | VCons of valor * valor
+and  
+  renv = (ident * valor) list
+              
+type tenv = (ident * tipo) list
 
   
-(*=========== TYPEINFER ===================*)           
-type tyEnv =  (string * tipo) list
-    
-let rec lookup (g:tyEnv) (x:string) : tipo option = 
-  match g with 
-    [] -> None
-  | (y,t):: tail -> if x=y then Some t else lookup tail x
-           
-exception TypeError
-let rec typeinfer (g:tyEnv) (e:expr) : tipo = 
-  match e with 
-    Nv _ -> Int
-  | Bv _ -> Bool 
-    
-  | Bop(o,e1,e2) -> 
-      let t1 = typeinfer g e1  in
-      let t2 = typeinfer g e2  in
-      (match o with
-         Sum | Sub | Mul | Div ->
-           if (t1=Int) && (t2=Int) then Int else raise TypeError
-       | Eq | Gt | Lt | Neq ->
-           if (t1=Int) && (t2=Int) then Bool else raise TypeError
-       | And | Or -> 
-           if (t1=Bool) && (t2=Bool) then Bool else raise TypeError
-      ) 
-       
-  | If(e1,e2,e3) ->  
-      let t1 = typeinfer g e1  in
-      if (t1=Bool) then
-        let t2 = typeinfer g e2  in
-        let t3 = typeinfer g e3  in
-        if (t2=t3) then t2 else raise TypeError
-      else raise TypeError
-                      
-  | Id x ->
-      (match lookup g x with
-         None -> raise TypeError
-       | Some t -> t)
-      
-  | Fun(x,t,e1) -> 
-      let g' = (x,t)::g in 
-      let t1 = typeinfer g' e1 in 
-      Arrow(t,t1)
-                     
-  | Let(x,t,e1,e2) -> 
-      let t1 = typeinfer g e1 in 
-      let g' = (x,t)::g in
-      let t2 = typeinfer g' e2 in
-      if t1=t then t2 else raise TypeError
-      
-                        
-  | App(e1,e2) -> 
-      let t1 = typeinfer g e1  in
-      (match t1 with
-         Arrow(t,t') -> 
-           let t2 = typeinfer g e2  in
-           if t=t2 then t' else raise TypeError
-       | _ -> raise TypeError)
+(* exceções que não devem ocorrer  *)
+
+exception BugParser
   
-  | Nothing t -> Maybe t
+
+  
+  (**+++++++++++++++++++++++++++++++++++++++++*)
+(*         INFERÊNCIA DE TIPOS              *)
+(*++++++++++++++++++++++++++++++++++++++++++*)
+
+
+exception TypeError of string
+
+
+let rec typeinfer (tenv:tenv) (e:expr) : tipo =
+  match e with
+
+    (* TInt  *)
+  | Num _ -> TyInt
+
+    (* TVar *)
+  | Var x ->
+      (match List.assoc_opt x tenv with
+         Some t -> t
+       | None -> raise (TypeError ("variavel nao declarada:" ^ x)))
+
+    (* TBool *)
+  | Bool _ -> TyBool 
+  
+
+    (*TOP+  e outras para demais operadores binários *)
+  | Binop(oper,e1,e2) ->
+      let t1 = typeinfer tenv e1 in
+      let t2 = typeinfer tenv e2 in
+      if t1 = TyInt && t2 = TyInt then
+        (match oper with
+           Sum | Sub | Mult |Div -> TyInt
+         | Eq | Lt | Gt | Geq | Leq -> TyBool)
+      else raise (TypeError "operando nao é do tipo int")
+
+    (* TPair *)
+  | Pair(e1,e2) -> TyPair(typeinfer tenv e1, typeinfer tenv e2)
+  (* TFst *)
+  | Fst e1 ->
+      (match typeinfer tenv e1 with
+         TyPair(t1,_) -> t1
+       | _ -> raise (TypeError "fst espera tipo par"))
+    (* TSnd  *)
+  | Snd e1 ->
+      (match typeinfer tenv e1 with
+         TyPair(_,t2) -> t2
+       | _ -> raise (TypeError "snd espera tipo par"))
+
+    (* TIf  *)
+  | If(e1,e2,e3) ->
+      (match typeinfer tenv e1 with
+         TyBool ->
+           let t2 = typeinfer tenv e2 in
+           let t3 = typeinfer tenv e3
+           in if t2 = t3 then t2
+           else raise (TypeError "then/else com tipos diferentes")
+       | _ -> raise (TypeError "condição de IF não é do tipo bool"))
+
+    (* TFn *)
+  | Fn(x,t,e1) ->
+      let t1 = typeinfer ((x,t) :: tenv) e1
+      in TyFn(t,t1)
+
+    (* TApp *)
+  | App(e1,e2) ->
+      (match typeinfer tenv e1 with
+         TyFn(t, t') ->  if (typeinfer tenv e2) = t then t'
+           else raise (TypeError "tipo argumento errado" )
+       | _ -> raise (TypeError "tipo função era esperado"))
+
+    (* TLet *)
+  | Let(x,t,e1,e2) ->
+      if (typeinfer tenv e1) = t then typeinfer ((x,t) :: tenv) e2
+      else raise (TypeError "expressão nao é do tipo declarado em Let" )
+
+    (* TLetRec *)
+  | LetRec(f,(TyFn(t1,t2) as tf), Fn(x,tx,e1), e2) ->
+      let tenv_com_tf = (f,tf) :: tenv in
+      let tenv_com_tf_tx = (x,tx) :: tenv_com_tf in
+      if (typeinfer tenv_com_tf_tx e1) = t2
+      then typeinfer tenv_com_tf e2
+      else raise (TypeError "tipo da funcao recursiva é diferente do declarado")
+  | LetRec _ -> raise BugParser
+                  
+    (* TNothing *)
+  | Nothing t -> TyMaybe t
     
-  | Just e -> Maybe (typeinfer g e)
-                 
-  | Nil t -> List t
-    
+    (* TJust *)
+  | Just e -> TyMaybe (typeinfer tenv e)
+      
+    (* TNil *)
+  | Nil t -> TyList t 
+               
+    (* TMatchMaybe *)
   | MatchMaybe(e1, e2, x, e3) ->
-      let t1 = typeinfer g e1 in
+      let t1 = typeinfer tenv e1 in
       (match t1 with
-         Maybe t ->
-           let t2 = typeinfer g e2 in
-           let g' = (x, t)::g in
+         TyMaybe t ->
+           let t2 = typeinfer tenv e2 in
+           let g' = (x, t)::tenv in
            let t3 = typeinfer g' e3 in
-           if t2=t3 then t2 else raise TypeError
-       | _ -> raise TypeError)
+           if t2=t3 then t2 else raise (TypeError "Tipos diferentes nas expressões do match")
+       | _ -> raise (TypeError "Tipo da expressão a parear não é um Maybe"))
       
+    (* TMatchList *)
   | MatchList(e1, e2, x, xs, e3) ->
-      let t1 = typeinfer g e1 in
+      let t1 = typeinfer tenv e1 in
       (match t1 with
-         List t ->
-           let t2 = typeinfer g e2 in
-           let g' = (xs, List t)::((x, t)::g) in
+         TyList t ->
+           let t2 = typeinfer tenv e2 in
+           let g' = (xs, TyList t)::((x, t)::tenv) in
            let t3 = typeinfer g' e3 in
-           if t2=t3 then t2 else raise TypeError
-       | _ -> raise TypeError)
+           if t2=t3 then t2 else raise (TypeError "Tipos diferentes nas expressões do match")
+       | _ -> raise (TypeError "Tipo da expressão a parear não é uma lista"))
       
+    (* TCons *)
   | Cons(e1, e2) ->
-      let t1 = typeinfer g e1 in
-      let t2 = typeinfer g e2 in
+      let t1 = typeinfer tenv e1 in
+      let t2 = typeinfer tenv e2 in
       (match t2 with
-         List t ->
-           if t=t1 then List t else raise TypeError
-       | _ -> raise TypeError)
+         TyList t ->
+           if t=t1 then TyList t else raise (TypeError "Tipo da expressão e da lista são diferentes")
+       | _ -> raise (TypeError "A segunda expressão não é uma lista"))
+      
+    (* TPipe *)
+  | Pipe(e1, e2) ->
+      let t1 = typeinfer tenv e1 in
+      let t2 = typeinfer tenv e2 in
+      (match t2 with
+         TyFn(input, output) ->
+           if t1=input then output else raise (TypeError "Tipo do valor e do valor de entrada da função são diferentes")
+       | _ -> raise (TypeError "Tipo do segundo valor não é função"))
+                  
+  
+(**+++++++++++++++++++++++++++++++++++++++++*)
+(*                 AVALIADOR                *)
+(*++++++++++++++++++++++++++++++++++++++++++*)
+
+
+exception BugTypeInfer
+
+let compute (oper: op) (v1: valor) (v2: valor) : valor =
+  match (oper, v1, v2) with
+    (Sum, VNum(n1), VNum(n2)) -> VNum (n1 + n2)
+  | (Sub, VNum(n1), VNum(n2)) -> VNum (n1 - n2)
+  | (Mult, VNum(n1),VNum(n2)) -> VNum (n1 * n2) 
+  | (Div, VNum(n1),VNum(n2))  -> VNum (n1 / n2)    
+  | (Eq, VNum(n1), VNum(n2))  -> VBool (n1 = n2) 
+  | (Gt, VNum(n1), VNum(n2))  -> VBool (n1 > n2)  
+  | (Lt, VNum(n1), VNum(n2))  -> VBool (n1 < n2)  
+  | (Geq, VNum(n1), VNum(n2)) -> VBool (n1 >= n2) 
+  | (Leq, VNum(n1), VNum(n2)) -> VBool (n1 <= n2) 
+  | _ -> raise BugTypeInfer
+
+
+let rec eval (renv:renv) (e:expr) :valor =
+  match e with
+    Num n -> VNum n
+  
+  | Var x ->
+      (match List.assoc_opt x renv with
+         Some v -> v
+       | None -> raise BugTypeInfer ) 
+      
+  | Bool b -> VBool b 
+    
+  | Binop(oper,e1,e2) ->
+      let v1 = eval renv e1 in
+      let v2 = eval renv e2 in
+      compute oper v1 v2
+        
+  | Pair(e1,e2) ->
+      let v1 = eval renv e1 in
+      let v2 = eval renv e2
+      in VPair(v1,v2)
+
+  | Fst e ->
+      (match eval renv e with
+       | VPair(v1,_) -> v1
+       | _ -> raise BugTypeInfer)
+
+  | Snd e ->
+      (match eval renv e with
+       | VPair(_,v2) -> v2
+       | _ -> raise BugTypeInfer)
+
+
+  | If(e1,e2,e3) ->
+      (match eval renv e1 with
+         VBool true  -> eval renv e2
+       | VBool false -> eval renv e3
+       | _ -> raise BugTypeInfer )
+      
+  | Fn(x,_,e1)  -> VClos(x,e1, renv)
+                     
+  | App(e1,e2) ->
+      let v1 = eval renv e1 in
+      let v2 = eval renv e2 in
+      (match v1 with 
+         VClos(   x,e',renv') ->
+           eval  (         (x,v2) :: renv')  e' 
+       | VRClos(f,x,e',renv') -> 
+           eval  ((f,v1) ::(x,v2) :: renv')  e' 
+       | _  -> raise BugTypeInfer) 
+
+  | Let(x,_,e1,e2) ->
+      let v1 = eval renv e1
+      in eval ((x,v1) :: renv) e2
+
+  | LetRec(f,TyFn(t1,t2),Fn(x,tx,e1), e2) when t1 = tx ->
+      let renv'=  (f, VRClos(f,x,e1,renv)) :: renv
+      in eval renv' e2
+        
+        
+  | LetRec _ -> raise BugParser
+                  
+  | Nothing t -> VNothing t
+                   
+  | Nil t -> VNil t
+               
+  | Cons(e1, e2) -> VCons(eval renv e1, eval renv e2)
+                             
+  | Just e1 -> VJust (eval renv e1)
+                 
+  | MatchMaybe(e1, e2, x, e3) ->
+      let v1 = eval renv e1 in
+      let v2 = eval renv e2 in
+      (match v1 with
+         VNothing _ -> v2
+       | VJust e4 -> eval ((x, e4)::renv) e3
+       | _ -> raise BugTypeInfer) 
+                                   
+  | MatchList(e1, e2, x, xs, e3)->
+      let v1 = eval renv e1 in
+      let v2 = eval renv e2 in
+      (match v1 with
+         VNil _ -> v2
+       | VCons(head, tail) -> eval ((xs, tail)::((x, head)::renv)) e3
+       | _ -> raise BugTypeInfer)
       
   | Pipe(e1, e2) ->
-      let t1 = typeinfer g e1 in
-      let t2 = typeinfer g e2 in
-      (match t2 with
-         Arrow(input, output) ->
-           if t1=input then output else raise TypeError
-       | _ -> raise TypeError)
+      let v1 = eval renv e1 in
+      let v2 = eval renv e2 in
+      (match v2 with
+         VClos(x, e3, renv') -> eval ((x, v1)::renv') e3
+       | VRClos(x, f, e3, renv') -> 
+           let v3 = eval ((x, v1)::renv') e3 in
+           eval ((f, v3)::((x, v1)::renv')) e3
+       | _ -> raise BugTypeInfer)
       
-     
-      
- 
+                  
+                  
+(* função auxiliar que converte tipo para string *)
 
-(* ======= AVALIADOR =========================*)
+let rec ttos (t:tipo) : string =
+  match t with
+    TyInt  -> "int"
+  | TyBool -> "bool"
+  | TyFn(t1,t2)   ->  "("  ^ (ttos t1) ^ " --> " ^ (ttos t2) ^ ")"
+  | TyPair(t1,t2) ->  "("  ^ (ttos t1) ^ " * "   ^ (ttos t2) ^ ")" 
+  | TyList t -> (ttos t) ^ " list"
+  | TyMaybe t -> "maybe " ^ (ttos t)
 
-let rec value (e:expr) : bool =
-  match e with
-    Nv _ | Bv _ | Fun _ | Nothing _ | Just _ | Nil _ | Cons(_, _) -> true 
-  | _ -> false
+(* função auxiliar que converte valor para string *)
 
-exception NoRuleApplies
-  
-let rec subs (v:expr) (x:string) (e:expr) = 
-  match e with 
-    Nv _ -> e
-  | Bv _ -> e
-  | Bop(o,e1,e2) -> Bop(o,  subs v x e1,   subs v x e2)
-  | If(e1,e2,e3) -> If(subs v x e1, subs v x e2, subs v x e3)
-                       
-  | Id y           -> 
-      if x=y then v else e 
-  | Fun(y,t,e1)    -> 
-      if x=y then e else Fun(y,t,subs v x e1)
-  | Let(y,t,e1,e2) -> 
-      if x=y then Let(y,t,subs v x e1,e2) 
-      else Let(y,t,subs v x e1,subs v x e2)
-      
-  | App(e1,e2)  -> App(subs v x e1, subs v x e2)
-                     
-  | Nothing _ -> e
-    
-  | Nil _ -> e
-    
-  | Just e1 -> Just (subs v x e1)
-                 
-  | MatchList(e1, e2, y, ys, e3) ->
-      if x=y then MatchList(subs v x e1, subs v x e2, y, ys, e3)
-      else MatchList(subs v x e1, subs v x e2, y, ys, subs v x e3) 
-          
-  | MatchMaybe(e1, e2, y, e3) ->
-      if x=y then MatchMaybe(subs v x e1, subs v x e2, y, e3)
-      else MatchMaybe(subs v x e1, subs v x e2, y, subs v x e3) 
-          
-  | Pipe(e1, e2) -> Pipe(subs v x e1, subs v x e2)
-                      
-  | Cons(e1, e2) -> Cons(subs v x e1, subs v x e2)
-      
- 
-exception DivZero 
-exception FixTypeInfer
-  
-let rec compute (o:bop) (v1:expr) (v2:expr) = 
-  match (v1,v2) with
-    (Nv n1, Nv n2) -> 
-      (match o with 
-         Sum -> Nv (n1+n2)
-       | Sub -> Nv (n1-n2)
-       | Mul -> Nv (n1*n2)
-       | Div -> if n2 != 0 then Nv (n1/n2) else raise DivZero
-       | Eq -> Bv(n1==n2)
-       | Gt -> Bv(n1>n2)
-       | Lt -> Bv(n1<n2)
-       | Neq -> Bv(n1!=n2)
-       | _   -> raise FixTypeInfer)
-  | (Bv b1, Bv b2) ->
-      (match o with 
-         And -> Bv(b1 && b2)
-       | Or  -> Bv(b1 || b2)
-       | _   -> raise FixTypeInfer)
-  | _ -> raise FixTypeInfer 
-           
-let rec step (e:expr) : expr = 
-  match e with
-    Nv _ -> raise NoRuleApplies
-  | Bv _ -> raise NoRuleApplies
-              
-  | Bop(o,v1,v2) when (value v1) && (value v2) -> 
-      compute o v1 v2
-  | Bop(o,v1,e2) when value v1 ->
-      let e2' = step e2 in Bop(o,v1,e2')
-  | Bop(o,e1,e2)  ->
-      let e1' = step e1 in Bop(o,e1',e2)
-                     
-  | If(Bv true, e2, e3) -> e2
-  | If(Bv false, e2, e3) -> e3 
-  | If(e1, e2, e3) ->
-      let e1' = step e1 in If(e1', e2, e3)
+let rec vtos (v: valor) : string =
+  match v with
+    VNum n -> string_of_int n
+  | VBool true -> "true"
+  | VBool false -> "false"
+  | VPair(v1, v2) ->
+      "(" ^ vtos v1 ^ "," ^ vtos v1 ^ ")"
+  | VClos _ ->  "fn"
+  | VRClos _ -> "fn"
+  | VNothing _ -> "nothing"
+  | VNil _ -> "nil"
+  | VJust v -> "just " ^ (vtos v)
+  | VCons(v1, v2) -> "cons(" ^ (vtos v1) ^ ", " ^ (vtos v2) ^ ")"
 
+(* principal do interpretador *)
 
-  | Id _ -> raise NoRuleApplies
-  | Fun(x,t,e1) -> raise NoRuleApplies
-                     
-  | Let(x,t,v1,e2) when value v1 -> subs v1 x e2   (*  {v1/x} e2 *)
-  | Let(x,t,e1,e2) -> 
-      let e1' = step e1 in Let(x,t,e1',e2) 
-      
-  | App(Fun(x,t,e1), v2) when value v2 -> 
-      subs v2 x e1
-  | App(v1,e2) when value v1 ->
-      let e2' = step e2 in App(v1,e2')
-  | App(e1,e2)  ->
-      let e1' = step e1 in App(e1',e2)
-  
-  | Nothing t -> raise NoRuleApplies
-                   
-  | Nil t -> raise NoRuleApplies
-               
-  | Cons(_, _) -> raise NoRuleApplies
-               
-  | Just v when value v -> raise NoRuleApplies
-                             
-  | Just e1 -> Just (step e1)
-                 
-  | MatchMaybe(v1, e2, x, e3) when value v1 ->
-      (match v1 with
-         Nothing _ -> e2
-       | Just e4 -> subs e4 x e3
-       | _ -> raise FixTypeInfer)
-      
-  | MatchMaybe(e1, e2, x, e3) -> MatchMaybe(step e1, e2, x, e3)
-                                   
-  | MatchList(v1, e2, x, xs, e3) when value v1 ->
-      (match v1 with
-         Nil _ -> e2
-       | Cons(head, tail) -> subs tail xs (subs head x e3)
-       | _ -> raise FixTypeInfer)
-      
-  | MatchList(e1, e2, x, xs, e3) -> MatchList(step e1, e2, x, xs, e3) 
-                                      
-  | Pipe(v1, v2) when (value v1) && (value v2) -> App(v2, v1)
-                                                    
-  | Pipe(e1, v2) when value v2 -> Pipe(step e1, v2)
-                                    
-  | Pipe(e1, e2) -> Pipe(e1, step e2) 
-  
-let rec eval (e:expr): expr = 
-  try 
-    let e' = step e in
-    eval e' 
-  with
-    NoRuleApplies -> e 
-                       
-
-(*===== INTEPRETADOR ========================*)
-
-let rec strofexpr (e:expr) = failwith "não implementado"
-let rec stroftipo (t:tipo) = failwith "não implementado"
-    
-    
-  
-let rec interpretador (e:expr) : unit = 
+let int_bse (e:expr) : unit =
   try
-    let t = typeinfer []  e in
-    let v = eval e in
-    print_endline ((strofexpr e) ^ ":" ^ (stroftipo t) ^ 
-                   " = " ^ (strofexpr v))
-  with 
-    TypeError -> print_endline "Erro de tipo"
+    let t = typeinfer [] e in
+    let v = eval [] e
+    in  print_string ((vtos v) ^ " : " ^ (ttos t))
+  with
+    TypeError msg ->  print_string ("erro de tipo - " ^ msg) 
+  | BugTypeInfer  ->  print_string "corrigir bug em typeinfer"
+  | BugParser     ->  print_string "corrigir bug no parser para let rec"
   
-
-(*======== TESTES ===================*) 
-
-(* 
-let a:int = 10 in
-let b:int = 0 in 
-a / b
-*)
-
-let tst1 = Let("a", Int, Nv 10, 
-               Let ("b", Int, Nv 0, 
-                    Bop (Div, Id "a", Id "b")))
-(*
-
-let dobro : int -> int = fn x:int => x * 2 in
-dobro 10
-*)   
-  
-let tst2 = Let("dobro", Arrow(Int,Int),Fun("x",Int,Bop (Mul, Id "x", Nv 2)) , 
-               App(Id "dobro", Nv 10))
-    
-    (*
-
-let dobro : int -> int = fn x:int => x * 2 in
-        dobro 
-   *)   
-  
-let tst3 = Let("dobro", Arrow(Int,Int),Fun("x",Int,Bop (Mul, Id "x", Nv 2)) , 
-               Id "dobro")
- 
-    (* teste para subs  *)
-
-    (*  fn x:int => x + z  *)
-let expr1 = Fun("x",Int,  Bop(Sum, Id "x", Id "z"))
-    
-    (* let x = x + 10 in 2 * x *)
-let expr2 = Let("x", Int, Bop(Sum, Id "x", Nv 10), 
-                Bop(Mul, Nv 2, Id "x"))
-    
+(* tests *)
+let test_pipe = Pipe(Num 3, Fn("x", TyInt, Cons(Binop(Sum, Var "x", Num 6), Cons(Num 6, Nil TyInt))))
+let test_match_list = MatchList(test_pipe, Num 49, "x", "xs", MatchList(Var "xs", Num 118, "y", "ys", Binop(Sum, Var "x", Var "y")))
