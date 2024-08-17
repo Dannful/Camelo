@@ -309,9 +309,7 @@ let rec eval (renv:renv) (e:expr) :valor =
       let v2 = eval renv e2 in
       (match v2 with
          VClos(x, e3, renv') -> eval ((x, v1)::renv') e3
-       | VRClos(x, f, e3, renv') -> 
-           let v3 = eval ((x, v1)::renv') e3 in
-           eval ((f, v3)::((x, v1)::renv')) e3
+       | VRClos(f, x, e3, renv') -> eval ((f, v2)::((x, v1)::renv')) e3
        | _ -> raise BugTypeInfer)
       
                   
@@ -357,4 +355,84 @@ let int_bse (e:expr) : unit =
   
 (* tests *)
 let test_pipe = Pipe(Num 3, Fn("x", TyInt, Cons(Binop(Sum, Var "x", Num 6), Cons(Num 6, Nil TyInt))))
-let test_match_list = MatchList(test_pipe, Num 49, "x", "xs", MatchList(Var "xs", Num 118, "y", "ys", Binop(Sum, Var "x", Var "y")))
+let test_match_list = MatchList(test_pipe, Num 49, "x", "xs", MatchList(Var "xs", Num 118, "y", "ys", Binop(Sum, Var "x", Var "y"))) 
+  
+let test_lookup = LetRec(
+    "lookup",
+    TyFn(TyInt, TyFn(TyList (TyPair(TyInt, TyInt)), TyMaybe TyInt)),
+    Fn(
+      "k",
+      TyInt,
+      Fn(
+        "l",
+        TyList (TyPair(TyInt, TyInt)),
+        MatchList(
+          Var "l",
+          Nothing TyInt,
+          "x", "xs",
+          If(
+            Binop(Eq, Fst (Var "x"), Var "k"),
+            Just (Snd (Var "x")),
+            App(App((Var "lookup"), (Var "k")), (Var "xs")))))),
+    Let(
+      "base_dados",
+      TyList (TyPair(TyInt, TyInt)),
+      Cons(
+        Pair(Num 1, Num 10),
+        Cons(
+          Pair(Num 2, Num 20),
+          Cons(
+            Pair(Num 3, Num 30),
+            Cons(
+              Pair(Num 4, Num 40),
+              Cons(
+                Pair(Num 5, Num 50),
+                Nil (TyPair(TyInt, TyInt))
+              )
+            )
+          )
+        )
+      ),
+      Let(
+        "key",
+        TyInt,
+        Num 3,
+        MatchMaybe(
+          App(App(Var "lookup", Var "key"), Var "base_dados"),
+          Num 0,
+          "n",
+          Var "n"
+        )
+      )
+    )) 
+ 
+let test_list_max = LetRec(
+    "list_max",
+    TyFn(TyList TyInt, TyMaybe TyInt),
+    Fn(
+      "l",
+      TyList TyInt,
+      MatchList(
+        Var "l",
+        Nothing TyInt,
+        "h",
+        "t",
+        MatchMaybe(
+          App(Var "list_max", Var "t"),
+          Just (Var "h"),
+          "m",
+          Just (
+            If(
+              Binop(Geq, Var "h", Var "m"),
+              Var "h",
+              Var "m"
+            )
+          )
+        )
+      )
+    ),
+    Pair(
+      Pipe(Cons(Num 300, Cons(Num 9, Cons(Num 3, Nil TyInt))), Var "list_max"),
+      Pipe(Nil TyInt, Var "list_max")
+    )
+  )
