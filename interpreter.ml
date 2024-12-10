@@ -290,17 +290,15 @@ let rec eval (renv:renv) (e:expr) :valor =
                  
   | MatchMaybe(e1, e2, x, e3) ->
       let v1 = eval renv e1 in
-      let v2 = eval renv e2 in
       (match v1 with
-         VNothing _ -> v2
+         VNothing _ -> eval renv e2
        | VJust e4 -> eval ((x, e4)::renv) e3
        | _ -> raise BugTypeInfer) 
                                    
   | MatchList(e1, e2, x, xs, e3)->
       let v1 = eval renv e1 in
-      let v2 = eval renv e2 in
       (match v1 with
-         VNil _ -> v2
+         VNil _ -> eval renv e2
        | VCons(head, tail) -> eval ((xs, tail)::((x, head)::renv)) e3
        | _ -> raise BugTypeInfer)
       
